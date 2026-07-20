@@ -15,6 +15,8 @@ class FinanceInputs:
     sales_months: int
     build_months: int
     discount_rate_annual: float
+    tax_rate: float = 0.0
+    transaction_cost_pct: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -64,10 +66,13 @@ def _monthly_rate(annual_rate: float) -> float:
 
 
 def evaluate_project(inputs: FinanceInputs) -> FinanceOutputs:
-    revenue_total = float(inputs.total_units * inputs.sell_price_per_unit)
+    revenue_gross = float(inputs.total_units * inputs.sell_price_per_unit)
+    revenue_total = revenue_gross * (1.0 - inputs.transaction_cost_pct)
     costs_total = float(inputs.construction_cost_total + inputs.soft_costs_total + inputs.land_cost)
-    profit_total = revenue_total - costs_total
-    profit_margin = profit_total / revenue_total if revenue_total > 0 else 0.0
+    profit_before_tax = revenue_total - costs_total
+    tax = max(0.0, profit_before_tax * inputs.tax_rate)
+    profit_total = profit_before_tax - tax
+    profit_margin = profit_total / revenue_gross if revenue_gross > 0 else 0.0
 
     m_rate = _monthly_rate(inputs.discount_rate_annual)
 
@@ -89,6 +94,9 @@ def evaluate_project(inputs: FinanceInputs) -> FinanceOutputs:
         if t <= months:
             cashflows[t] += sales_inflow
 
+    if months >= 1:
+        cashflows[months] -= tax
+
     npv = float(sum(cashflows[t] / ((1.0 + m_rate) ** t) for t in range(0, months + 1)))
 
     irr_annual = None
@@ -104,3 +112,42 @@ def evaluate_project(inputs: FinanceInputs) -> FinanceOutputs:
         npv=npv,
         irr_annual=irr_annual,
     )
+
+
+def compute_debt_schedule(
+    principal: float,
+    annual_rate: float,
+    term_years: int,
+    grace_years: int = 0,
+) -> list[dict]:
+    months = int(term_years * 12)
+    grace_months = int(grace_years * 12)
+    monthly_rate = _monthly_rate(annual_rate)
+    rows: list[dict] = []
+    balance = principal
+    for m in range(1, months + 1):
+        interest = balance * monthly_rate
+        disbursement = principal if m == 1 else 0.0
+        if m <= grace_months:
+            principal_payment = 0.0
+            payment = interest
+        else:
+            remaining = months - m + 1
+            if monthly_rate == 0.0 or remaining <= 0:
+                principal_payment = balance / max(remaining, 1)
+                payment = principal_payment + interest
+            else:
+                payment = balance * (monthly_rate * (1.0 + monthly_rate) ** remaining) / ((1.0 + monthly_rate) ** remaining - 1.0)
+                principal_payment = payment - interest
+        balance -= principal_payment
+        rows.append(
+            {
+                "periodo": m,
+                "desembolso": disbursement,
+                "interes": interest,
+                "capital": principal_payment,
+                "cuota": payment,
+                "saldo": max(0.0, balance),
+            }
+        )
+    return rows
