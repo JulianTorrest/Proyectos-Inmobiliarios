@@ -6,6 +6,7 @@ from typing import Optional
 
 import io
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -13,6 +14,7 @@ from fpdf import FPDF
 
 from src.agents.construction import run_construction_monitor
 from src.domain.construction_monitor import compute_progress
+from src.domain.finance import FinanceInputs, compute_debt_schedule, evaluate_project
 from src.agents.prefactibility import (
     PrefactibilityInputs,
     design_advice,
@@ -359,6 +361,38 @@ if "chat_language" not in st.session_state:
     st.session_state["chat_language"] = "Español"
 
 
+def _finance_inputs_from_pref(
+    inputs: PrefactibilityInputs,
+    market_df: pd.DataFrame,
+    tax_rate: float = 0.0,
+    transaction_cost_pct: float = 0.0,
+) -> FinanceInputs:
+    market = market_df[
+        (market_df["city"] == inputs.city) & (market_df["land_use"] == inputs.land_use)
+    ].head(1)
+    if market.empty:
+        raise ValueError("No se encontró supuesto de mercado dummy para la ciudad/uso seleccionado.")
+    m = market.iloc[0]
+    sell_price_per_unit = float(m["price_per_m2_sell"]) * float(inputs.avg_unit_size_m2)
+    cost_per_m2_build = float(m["cost_per_m2_build"])
+    soft_cost_pct = float(m["soft_cost_pct"])
+    buildable_m2 = float(inputs.units) * float(inputs.avg_unit_size_m2)
+    construction_cost_total = buildable_m2 * cost_per_m2_build
+    soft_costs_total = construction_cost_total * soft_cost_pct
+    return FinanceInputs(
+        total_units=int(inputs.units),
+        sell_price_per_unit=float(sell_price_per_unit),
+        construction_cost_total=float(construction_cost_total),
+        soft_costs_total=float(soft_costs_total),
+        land_cost=float(inputs.land_cost),
+        sales_months=int(m["sales_months"]),
+        build_months=int(m["build_months"]),
+        discount_rate_annual=float(m["discount_rate_annual"]),
+        tax_rate=tax_rate,
+        transaction_cost_pct=transaction_cost_pct,
+    )
+
+
 def _llm_settings():
     provider = PROVIDERS[st.session_state.provider_name]
     model = st.session_state.get("model", "").strip() or None
@@ -541,6 +575,109 @@ with tab_pref:
                 px.bar(sens_df, x="variable", y="npv", color="direccion", barmode="group", title="Impacto en VAN"),
                 use_container_width=True,
             )
+
+            st.markdown("### Sensibilidad multivariable")
+            with st.expander("Matriz de sensibilidad", expanded=False):
+                base_fin = _finance_inputs_from_pref(inputs, market_df)
+                sens_vars = [
+                    "sell_price_per_unit",
+                    "construction_cost_total",
+                    "discount_rate_annual",
+                    "tax_rate",
+                    "transaction_cost_pct",
+                ]
+                var_labels = {
+                    "sell_price_per_unit": "Precio venta/unidad",
+                    "construction_cost_total": "Costo construcción",
+                    "discount_rate_annual": "Tasa descuento",
+                    "tax_rate": "Tasa impuesto",
+                    "transaction_cost_pct": "Costo transacción",
+                }
+                c1, c2 = st.columns(2)
+                with c1:
+                    var1 = st.selectbox("Variable 1", sens_vars, format_func=lambda x: var_labels[x], key="sens_var1")
+                    min1 = st.slider("Mínimo %", -50, 50, -20, key="sens_min1")
+                    max1 = st.slider("Máximo %", -50, 50, 20, key="sens_max1")
+                    steps1 = st.slider("Pasos", 3, 11, 5, key="sens_steps1")
+                with c2:
+                    var2 = st.selectbox(
+                        "Variable 2",
+                        sens_vars,
+                        index=1,
+                        format_func=lambda x: var_labels[x],
+                        key="sens_var2",
+                    )
+                    min2 = st.slider("Mínimo % ", -50, 50, -20, key="sens_min2")
+                    max2 = st.slider("Máximo % ", -50, 50, 20, key="sens_max2")
+                    steps2 = st.slider("Pasos ", 3, 11, 5, key="sens_steps2")
+                if st.button("Calcular matriz", key="btn_sens_matrix"):
+                    vals1 = np.linspace(1 + min1 / 100, 1 + max1 / 100, steps1)
+                    vals2 = np.linspace(1 + min2 / 100, 1 + max2 / 100, steps2)
+                    rows = []
+                    for v1 in vals1:
+                        for v2 in vals2:
+                            base_dict = base_fin.__dict__.copy()
+                            base_dict[var1] = getattr(base_fin, var1) * v1
+                            base_dict[var2] = getattr(base_fin, var2) * v2
+                            fin = FinanceInputs(**base_dict)
+                            out = evaluate_project(fin)
+                            rows.append(
+                                {
+                                    var_labels[var1]: f"{v1 * 100:.0f}%",
+                                    var_labels[var2]: f"{v2 * 100:.0f}%",
+                                    "VAN": out.npv,
+                                    "Margen": out.profit_margin,
+                                    "TIR": out.irr_annual if out.irr_annual is not None else 0.0,
+                                }
+                            )
+                    sens_matrix_df = pd.DataFrame(rows)
+                    st.dataframe(sens_matrix_df, use_container_width=True)
+                    pivot = sens_matrix_df.pivot(
+                        index=var_labels[var1], columns=var_labels[var2], values="VAN"
+                    )
+                    st.plotly_chart(
+                        px.imshow(
+                            pivot,
+                            title="Mapa de calor VAN",
+                            color_continuous_scale="RdYlGn",
+                            aspect="auto",
+                        ),
+                        use_container_width=True,
+                    )
+
+            st.markdown("### Estructuración de deuda")
+            with st.expander("Cronograma de pagos", expanded=False):
+                total_inversion = result.finance.costs_total
+                deuda_pct = st.slider(
+                    "Porcentaje del costo total a financiar", 0.0, 1.0, 0.6, key="debt_pct"
+                )
+                tasa_interes = st.slider("Tasa de interés anual", 0.0, 0.30, 0.12, key="debt_rate")
+                plazo = st.slider("Plazo (años)", 1, 30, 10, key="debt_term")
+                gracia = st.slider("Período de gracia (años)", 0, 5, 1, key="debt_grace")
+                principal = total_inversion * deuda_pct
+                schedule = compute_debt_schedule(principal, tasa_interes, plazo, gracia)
+                schedule_df = pd.DataFrame(schedule)
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Principal", _money(principal))
+                c2.metric("Total intereses", _money(schedule_df["interes"].sum()))
+                c3.metric("Total cuotas", _money(schedule_df["cuota"].sum()))
+                st.dataframe(schedule_df, use_container_width=True)
+
+            st.markdown("### Impuestos y costos de transacción")
+            with st.expander("Impacto fiscal y comercial", expanded=False):
+                tax_rate = st.slider("Tasa de impuesto a la renta", 0.0, 0.50, 0.35, key="tax_rate")
+                trans_cost = st.slider(
+                    "Costos de transacción (% de ingresos)", 0.0, 0.20, 0.05, key="trans_cost"
+                )
+                fin_post_tax = _finance_inputs_from_pref(
+                    inputs, market_df, tax_rate=tax_rate, transaction_cost_pct=trans_cost
+                )
+                out_post_tax = evaluate_project(fin_post_tax)
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("VAN base", _money(result.finance.npv))
+                c2.metric("VAN post-impuestos", _money(out_post_tax.npv))
+                c3.metric("Margen base", f"{result.finance.profit_margin:.1%}")
+                c4.metric("Margen post-impuestos", f"{out_post_tax.profit_margin:.1%}")
 
             st.markdown("### Simulación Monte Carlo")
             n_sim = st.number_input(
