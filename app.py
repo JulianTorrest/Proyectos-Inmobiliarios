@@ -28,7 +28,12 @@ def _money(v: float) -> str:
 
 
 def _build_chat_context() -> str:
-    parts: list[str] = []
+    parts: list[str] = [
+        "Este es un prototipo de aplicación multiagente para evaluación de pre-factibilidad "
+        "y monitoreo de obras inmobiliarias en Colombia. Combina agentes de normativa, "
+        "finanzas, redacción, extracción de datos de obra y alertas. "
+        "Los datos son dummy de referencia, no oficiales."
+    ]
 
     pref_inputs = st.session_state.get("pref_inputs")
     pref_result = st.session_state.get("pref_result")
