@@ -116,7 +116,7 @@ with st.sidebar:
             )
         )
 
-    llm = MultiProviderLLM(secrets=dict(st.secrets))
+    llm = MultiProviderLLM(secrets=st.secrets)
     configured = llm.is_configured(provider)
     if use_llm and not configured:
         st.warning(f"Falta API key: {provider.api_key_env}. Se usará modo heurístico.")
