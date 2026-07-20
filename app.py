@@ -368,6 +368,8 @@ tab_pref, tab_monitor, tab_chat = st.tabs([
 with tab_pref:
     st.subheader("Pre-factibilidad (Normativo/Financiero/Redactor)")
     provider, model, use_llm, configured = _llm_settings()
+    mistral_provider = PROVIDERS["Mistral"]
+    mistral_configured = llm.is_configured(mistral_provider)
     rules_df = load_normative_rules()
     market_df = load_market_assumptions()
 
@@ -413,9 +415,9 @@ with tab_pref:
                 normative_rules_df=rules_df,
                 market_df=market_df,
                 llm=llm,
-                provider=provider,
-                model=model,
-                use_llm=bool(use_llm and configured),
+                provider=mistral_provider,
+                model=None,
+                use_llm=mistral_configured,
             )
 
             st.session_state["pref_inputs"] = inputs
@@ -430,6 +432,26 @@ with tab_pref:
         k3.metric("Margen", f"{result.finance.profit_margin:.1%}")
         irr = result.finance.irr_annual
         k4.metric("TIR anual", f"{irr:.1%}" if irr is not None else "N/D")
+
+        norm_msg = (
+            "Normativo OK: la configuración cumple con los límites dummy de pisos, FAR, ocupación y altura."
+            if result.normative.allowed
+            else "Normativo NO OK: la configuración NO cumple uno o más límites normativos dummy. Revisa:"
+        )
+        st.caption(norm_msg)
+        if not result.normative.allowed:
+            for r in result.normative.reasons:
+                st.write(f"- {r}")
+
+        with st.expander("Glosario de métricas"):
+            st.markdown(
+                """
+- **VAN (NPV)**: Valor Actual Neto. Suma de los flujos de caja futuros descontados a hoy. Si es **positivo**, el proyecto genera valor; si es **negativo**, no cubre la tasa de descuento.
+- **TIR anual**: Tasa Interna de Retorno. Es la rentabilidad anualizada del proyecto. Si la TIR es mayor a la tasa de descuento, el proyecto es financieramente atractivo.
+- **Margen (profit margin)**: Utilidad neta dividida por ingresos totales. Indica qué porcentaje de cada peso vendido se convierte en ganancia.
+- **Normativo OK/NO OK**: Indica si la configuración de pisos, área y unidades cumple con las reglas dummy de normativa del caso.
+"""
+            )
 
         st.markdown("### Resumen financiero")
         fin_df = pd.DataFrame(
@@ -465,7 +487,19 @@ with tab_pref:
             result = st.session_state["pref_result"]
 
             st.markdown("### Asesor de diseño preliminar")
-            st.text_area("", value=design_advice(inputs, rules_df), height=140, key="design_advice_text")
+            st.text_area(
+                "",
+                value=design_advice(
+                    inputs,
+                    rules_df,
+                    llm,
+                    mistral_provider,
+                    model=None,
+                    use_llm=mistral_configured,
+                ),
+                height=140,
+                key="design_advice_text",
+            )
 
             with st.expander("Guardar y comparar escenarios", expanded=False):
                 c1, c2 = st.columns([1, 3])
@@ -615,9 +649,9 @@ with tab_pref:
                         inputs,
                         rules_df,
                         llm,
-                        provider,
-                        model=model,
-                        use_llm=bool(use_llm and configured),
+                        mistral_provider,
+                        model=None,
+                        use_llm=mistral_configured,
                     )
                 st.session_state["pref_checklist"] = checklist
             if "pref_checklist" in st.session_state:
