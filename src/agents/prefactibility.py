@@ -478,8 +478,30 @@ def recommend_unit_mix(
 def design_advice(
     inputs: PrefactibilityInputs,
     rules_df: pd.DataFrame,
+    llm: MultiProviderLLM,
+    provider: LLMProviderConfig,
+    model: Optional[str] = None,
+    use_llm: bool = True,
 ) -> str:
     rule = _pick_rule(rules_df, inputs.city, inputs.land_use)
+    if use_llm:
+        system = (
+            "Eres un arquitecto-asesor senior de pre-diseño inmobiliario en Colombia. "
+            "Con base en los datos normativos y de mercado dummy entregados, da recomendaciones prácticas y concisas "
+            "de diseño preliminar: torres, pisos, unidades por piso, parqueaderos, zonas comunes, y advertencias normativas. "
+            "NO inventes normativas reales; aclara que los datos son supuestos."
+        )
+        user = (
+            f"Ciudad: {inputs.city}, uso de suelo: {inputs.land_use}, área lote: {inputs.area_m2} m2, "
+            f"pisos solicitados: {inputs.floors_requested}, unidades: {inputs.units}, "
+            f"tamaño promedio: {inputs.avg_unit_size_m2} m2, costo lote: ${inputs.land_cost:,.0f} COP.\n\n"
+            f"Regla normativa dummy: max_floors={rule.max_floors}, max_far={rule.max_far}, "
+            f"max_occupancy_ratio={rule.max_occupancy_ratio}, max_height_m={rule.max_height_m}.\n\n"
+            "Entrega bullets de diseño preliminar y advertencias."
+        )
+        res = llm.chat(provider=provider, model=model, system=system, user=user)
+        if res.ok:
+            return res.content
     max_buildable_far = inputs.area_m2 * rule.max_far
     units_far_max = int(max_buildable_far / inputs.avg_unit_size_m2) if inputs.avg_unit_size_m2 else 0
     floors = min(inputs.floors_requested, rule.max_floors)
