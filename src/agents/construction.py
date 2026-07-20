@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -70,3 +70,89 @@ def run_construction_monitor(
         )
 
     return ConstructionMonitorOutputs(milestones=milestones, summary=summary, alert_report=alert_report)
+
+
+def lifecycle_status(baseline: pd.DataFrame, events: pd.DataFrame, as_of: date) -> dict:
+    milestones, summary = compute_progress(baseline, events, as_of)
+    planned = float(summary.loc[summary["metric"] == "planned_progress", "value"].iloc[0])
+    actual = float(summary.loc[summary["metric"] == "actual_progress", "value"].iloc[0])
+    delta = actual - planned
+    atrasados = milestones[milestones["risk"] == "Atrasado"]["milestone"].tolist()
+
+    future = milestones[~milestones["planned_completed"]].sort_values("planned_date")
+    if not future.empty:
+        next_m = future.iloc[0]
+        next_milestone = str(next_m["milestone"])
+        next_date = next_m["planned_date"]
+        days_to_next = (next_date - as_of).days
+    else:
+        next_milestone = "Ninguno"
+        next_date = None
+        days_to_next = None
+
+    if actual >= 1.0:
+        phase = "Entrega y cierre"
+    elif actual >= 0.75:
+        phase = "Acabados e instalaciones finales"
+    elif actual >= 0.40:
+        phase = "Obra gris / estructura y mampostería"
+    elif actual >= 0.10:
+        phase = "Preliminares / cimentación"
+    else:
+        phase = "Inicio / movimientos de tierra"
+
+    actions: list[str] = []
+    if atrasados:
+        actions.append(f"Recuperar hitos atrasados: {', '.join(atrasados)}.")
+    if delta < -0.05:
+        actions.append("Acelerar ritmo de obra para recuperar avance real vs planeado.")
+    elif delta >= 0:
+        actions.append("Mantener ritmo de obra; el avance está igual o adelantado.")
+    if next_date:
+        actions.append(f"Preparar el siguiente hito: {next_milestone} ({next_date.isoformat()}).")
+    else:
+        actions.append("Proyecto en cierre; coordinar entregas y puesta en marcha.")
+
+    return {
+        "phase": phase,
+        "planned_progress": planned,
+        "actual_progress": actual,
+        "delta": delta,
+        "atrasados": atrasados,
+        "next_milestone": next_milestone,
+        "next_date": next_date,
+        "days_to_next": days_to_next,
+        "actions": actions,
+    }
+
+
+def recommended_baseline(start_date: date, project_type: str = "residencial") -> pd.DataFrame:
+    templates = {
+        "residencial": [
+            ("Cierro y replanteo", 15),
+            ("Excavación", 30),
+            ("Cimentación", 45),
+            ("Estructura", 120),
+            ("Mampostería", 75),
+            ("Instalaciones", 90),
+            ("Acabados", 105),
+            ("Entrega", 15),
+        ],
+        "mixto": [
+            ("Cierro y replanteo", 20),
+            ("Excavación", 40),
+            ("Cimentación", 55),
+            ("Estructura", 150),
+            ("Mampostería", 90),
+            ("Instalaciones", 120),
+            ("Acabados", 130),
+            ("Entrega", 20),
+        ],
+    }
+    tasks = templates.get(project_type, templates["residencial"])
+    current = start_date
+    rows: list[dict] = []
+    for milestone, days in tasks:
+        current += timedelta(days=days)
+        rows.append({"milestone": milestone, "planned_date": current, "weight": days})
+    return pd.DataFrame(rows)
