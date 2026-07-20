@@ -367,10 +367,12 @@ def _llm_settings():
     return provider, model, use_llm, configured
 
 
-tab_pref, tab_monitor, tab_chat = st.tabs([
+tab_pref, tab_monitor, tab_chat, tab_info, tab_arch = st.tabs([
     "1) Pre-factibilidad",
     "2) Monitor de Obra",
     "3) Chat del Proyecto",
+    "4) Info del Proyecto",
+    "5) Arquitectura",
 ])
 
 
@@ -847,3 +849,126 @@ with tab_chat:
         st.session_state.messages = updated
         st.rerun()
 
+
+with tab_info:
+    st.subheader("Información del Proyecto")
+    st.markdown(
+        """
+## 1. ¿Qué es esto?
+Prototipo de una aplicación multiagente para evaluar **pre-factibilidad** y monitorear el **ciclo de vida de obras inmobiliarias** en Colombia. El objetivo es acelerar decisiones C-level con evaluaciones normativas, financieras y de riesgo usando LLMs.
+
+## 2. ¿Cómo lo hicimos?
+- **Streamlit** como UI y motor de reruns/estado (`st.session_state`).
+- **Agentes** en `src/agents/`: `prefactibility.py` (evaluación + reporte + diseño + checklist), `construction.py` (monitor + alertas), `chat.py` (asistente conversacional).
+- **Lógica de dominio** en `src/domain/` para mantener los cálculos puros y testeables.
+- **Datos** en `data/` CSV dummy, cargados/cachéados con `src/data/loaders.py` y generados con `src/data/generate.py` y scripts en `scripts/`.
+- **LLM multi-proveedor** en `src/llm/`: un wrapper sobre el SDK de OpenAI que puede apuntar a Mistral, OpenAI u otros endpoints compatibles.
+
+## 3. ¿Por qué solo funciona Mistral?
+En `src/llm/providers.py` se definen los proveedores y sus variables de entorno (`MISTRAL_API_KEY`, `OPENAI_API_KEY`, etc.). La app usa `resolve_api_key` para buscar la API key en `secrets.toml` o en variables de entorno. Hoy **solo `MISTRAL_API_KEY` está configurada**, por eso forzamos Mistral para reporte ejecutivo, checklist, asesor de diseño y alertas. Si se agregan las demás keys, `MultiProviderLLM` las usará automáticamente.
+
+## 4. Frameworks y librerías
+- **Streamlit**: prototipado rápido de UI sin front-end separado.
+- **pandas / numpy / scipy**: manipulación y cálculos numéricos.
+- **plotly**: visualizaciones interactivas.
+- **openai SDK**: llamadas a modelos compatibles (Mistral usa el mismo formato).
+- **fpdf2 + openpyxl**: exportación de reportes PDF y Excel.
+
+## 5. Funcionalidades actuales
+- Evaluación normativa (pisos, FAR, ocupación, altura) y financiera (VAN, TIR, margen).
+- Reporte ejecutivo con LLM.
+- Asesor de diseño preliminar con LLM.
+- Checklist de viabilidad con LLM.
+- Monte Carlo, optimización "hazlo factible" y recomendación de mix de unidades.
+- Comparación de escenarios.
+- Monitor de obra vs baseline con alertas LLM.
+- Cronograma recomendado y estado de ciclo de vida.
+- Export CSV/Excel/PDF.
+- Chat del proyecto con contexto RAG de pre-factibilidad y monitor.
+
+## 6. Funcionalidades intentadas / no implementadas aún
+- Integración real con bases de normativa/planeación urbana (usa datos dummy).
+- Carga de documentos reales (PDF, DWG, planos); solo soporta CSV dummy.
+- Persistencia en base de datos (todo vive en `session_state` y CSV locales).
+- Autenticación y multiusuario.
+- RAG vectorial con embeddings (se usa contexto plano en texto; no hay vector DB).
+- Uso de OpenAI u otros proveedores por defecto (requieren sus API keys).
+
+## 7. Archivos principales y relaciones
+- `app.py`: orquesta toda la UI y el flujo.
+- `src/agents/prefactibility.py`: agente de pre-factibilidad.
+- `src/agents/construction.py`: agente de monitor de obra.
+- `src/agents/chat.py`: agente de chat.
+- `src/domain/normative.py`, `finance.py`, `construction_monitor.py`: cálculos de dominio.
+- `src/data/loaders.py`: carga de CSV; `src/data/generate.py`: generación de datos dummy grandes.
+- `src/llm/client.py`: wrapper LLM; `src/llm/providers.py`: configuraciones.
+- `scripts/generate_dummy.py` y `populate_data.py`: scripts para poblar datos.
+- `data/*.csv`: archivos dummy de normativa, mercado, baseline y eventos.
+- `requirements.txt`: dependencias.
+"""
+    )
+
+
+with tab_arch:
+    st.subheader("Arquitectura")
+    st.markdown(
+        """
+A continuación hay dos diagramas:
+1. **Relación de archivos del repositorio**: qué archivo importa/usa a cuál.
+2. **Arquitectura macro**: cómo fluyen datos y decisiones entre el usuario, Streamlit, agentes, dominio, datos y LLM.
+"""
+    )
+
+    st.subheader("Relación de archivos")
+
+    file_dot = r"""
+digraph Archivos {
+    rankdir=TB;
+    node [shape=box, style="rounded,filled", fillcolor="#E8F4F8", fontname="Helvetica"];
+    edge [fontname="Helvetica"];
+
+    app [label="app.py\nStreamlit UI / orquestador"];
+    agents [label="src/agents/*.py\nprefactibility | construction | chat"];
+    domain [label="src/domain/*.py\nnormative | finance | construction_monitor"];
+    data [label="src/data/*.py\nloaders | generate"];
+    llm [label="src/llm/*.py\nclient | providers"];
+    scripts [label="scripts/*.py\ngenerate_dummy | populate_data"];
+    csv [label="data/*.csv\nnormativa | mercado | baseline | eventos", shape=cylinder];
+    apis [label="Mistral / OpenAI APIs", shape=ellipse, fillcolor="#FFF8E1"];
+
+    app -> agents [label="coordina"];
+    app -> data [label="carga CSV"];
+    agents -> domain [label="calcula"];
+    agents -> llm [label="chat"];
+    llm -> apis [label="OpenAI SDK"];
+    data -> csv [label="lee"];
+    scripts -> csv [label="genera"];
+}
+"""
+
+    st.graphviz_chart(file_dot, use_container_width=True)
+
+    st.subheader("Arquitectura macro")
+
+    macro_dot = r"""
+digraph Macro {
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fillcolor="#F3E8FF", fontname="Helvetica"];
+    edge [fontname="Helvetica"];
+
+    usuario [label="Usuario C-level", shape=ellipse];
+    streamlit [label="Streamlit UI\n(app.py)"];
+    agents [label="Agentes LLM\nprefact | monitor | chat"];
+    dominio [label="Lógica de dominio\npandas / numpy"];
+    datos [label="Datos dummy\nCSV + loaders"];
+    llm [label="Mistral / OpenAI\nOpenAI SDK", shape=ellipse, fillcolor="#FFF8E1"];
+    reportes [label="Reportes\nPDF / Excel / CSV"];
+
+    usuario -> streamlit -> agents -> dominio -> datos;
+    agents -> llm;
+    streamlit -> reportes;
+    dominio -> reportes;
+}
+"""
+
+    st.graphviz_chart(macro_dot, use_container_width=True)
