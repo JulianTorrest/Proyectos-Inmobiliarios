@@ -96,32 +96,22 @@ st.set_page_config(page_title="Multiagentes Inmobiliario (Colombia)", layout="wi
 st.title("Evaluador Automatizado y Monitor de Obra (Multiagente)")
 
 
-with st.sidebar:
-    st.header("LLM")
-    provider_name = st.selectbox("Proveedor", list(PROVIDERS.keys()), index=0)
-    provider = PROVIDERS[provider_name]
-    model = st.text_input("Modelo (opcional)", value="")
-    use_llm = st.toggle("Usar LLM", value=True)
-    st.caption("Configura las API Keys en Streamlit Cloud > Secrets o como variables de entorno.")
+llm = MultiProviderLLM(secrets=st.secrets)
 
-    with st.expander("Variables de entorno / Secrets"):
-        st.code(
-            "\n".join(
-                [
-                    "OPENAI_API_KEY",
-                    "GROK_API_KEY",
-                    "MISTRAL_API_KEY",
-                    "DEEPSEEK_API_KEY",
-                ]
-            )
-        )
+if "provider_name" not in st.session_state:
+    st.session_state["provider_name"] = "OpenAI"
+if "model" not in st.session_state:
+    st.session_state["model"] = ""
+if "use_llm" not in st.session_state:
+    st.session_state["use_llm"] = True
 
-    llm = MultiProviderLLM(secrets=st.secrets)
+
+def _llm_settings():
+    provider = PROVIDERS[st.session_state.provider_name]
+    model = st.session_state.get("model", "").strip() or None
+    use_llm = st.session_state.get("use_llm", True)
     configured = llm.is_configured(provider)
-    if use_llm and not configured:
-        st.warning(f"Falta API key: {provider.api_key_env}. Se usará modo heurístico.")
-    if use_llm and configured:
-        st.success(f"LLM listo ({provider.name}).")
+    return provider, model, use_llm, configured
 
 
 tab_pref, tab_monitor, tab_chat = st.tabs([
@@ -133,6 +123,7 @@ tab_pref, tab_monitor, tab_chat = st.tabs([
 
 with tab_pref:
     st.subheader("Pre-factibilidad (Normativo/Financiero/Redactor)")
+    provider, model, use_llm, configured = _llm_settings()
     rules_df = load_normative_rules()
     market_df = load_market_assumptions()
 
@@ -178,7 +169,7 @@ with tab_pref:
             market_df=market_df,
             llm=llm,
             provider=provider,
-            model=model.strip() or None,
+            model=model,
             use_llm=bool(use_llm and configured),
         )
 
@@ -221,6 +212,7 @@ with tab_pref:
 
 with tab_monitor:
     st.subheader("Monitor de Ciclo de Vida de Obra (Extractor + Alertas)")
+    provider, model, use_llm, configured = _llm_settings()
 
     left, right = st.columns([1, 2])
     with left:
@@ -245,7 +237,7 @@ with tab_monitor:
             as_of=as_of,
             llm=llm,
             provider=provider,
-            model=model.strip() or None,
+            model=model,
             use_llm=bool(use_llm and configured),
         )
 
@@ -293,6 +285,20 @@ with tab_chat:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
+    with st.expander("Configuración LLM", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.selectbox("Proveedor", list(PROVIDERS.keys()), key="provider_name")
+        with col2:
+            st.text_input("Modelo (opcional)", key="model")
+        st.toggle("Usar LLM", key="use_llm")
+
+    provider, model, use_llm, configured = _llm_settings()
+    if use_llm and not configured:
+        st.warning(f"Falta API key: {provider.api_key_env}. Se usará modo heurístico.")
+    if use_llm and configured:
+        st.success(f"LLM listo ({provider.name}).")
+
     if user_prompt := st.chat_input("Haz una pregunta sobre el proyecto..."):
         new_messages = list(st.session_state.messages) + [{"role": "user", "content": user_prompt}]
         ctx = _build_chat_context()
@@ -302,7 +308,7 @@ with tab_chat:
                 messages=new_messages,
                 llm=llm,
                 provider=provider,
-                model=model.strip() or None,
+                model=model,
                 use_llm=bool(use_llm and configured),
             )
         st.session_state.messages = updated
