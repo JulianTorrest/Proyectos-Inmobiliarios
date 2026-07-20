@@ -499,3 +499,44 @@ def design_advice(
             "reducir o tramitar excepción."
         )
     return "\n- ".join([""] + lines)
+
+
+def generate_checklist(
+    inputs: PrefactibilityInputs,
+    rules_df: pd.DataFrame,
+    llm: MultiProviderLLM,
+    provider: LLMProviderConfig,
+    model: Optional[str] = None,
+    use_llm: bool = True,
+) -> str:
+    rule = _pick_rule(rules_df, inputs.city, inputs.land_use)
+    if use_llm:
+        system = (
+            "Eres un experto en trámites inmobiliarios en Colombia. "
+            "Elabora un checklist de pasos legales, permisos y viabilidades necesarios para desarrollar un proyecto "
+            "con los datos entregados. Sé pragmático, indica responsable sugerido y riesgo de demora. "
+            "NO inventes normativas oficiales; aclara que es orientativo y requiere validación legal."
+        )
+        user = (
+            f"Ciudad: {inputs.city}\n"
+            f"Uso de suelo: {inputs.land_use}\n"
+            f"Área del lote: {inputs.area_m2} m2\n"
+            f"Pisos solicitados: {inputs.floors_requested}\n"
+            f"Unidades: {inputs.units}\n"
+            f"Altura máxima permitida: {rule.max_floors} pisos / {rule.max_height_m} m\n\n"
+            "Entrega un checklist numerado de 8-12 pasos con: paso, responsable sugerido, riesgo de demora (alto/medio/bajo)."
+        )
+        res = llm.chat(provider=provider, model=model, system=system, user=user)
+        if res.ok:
+            return res.content
+    return (
+        "Checklist de viabilidad (orientativo, sin LLM):\n"
+        "1. Verificación de usos de suelo y normativa aplicable.\n"
+        "2. Estudios previos de riesgo y usos del suelo.\n"
+        "3. Concepto de planeación urbana / licencia preliminar.\n"
+        "4. Licencia de urbanización o construcción según corresponda.\n"
+        "5. Aprobación de planos arquitectónicos y estructurales.\n"
+        "6. Permisos de uso de acueducto, energía y gas.\n"
+        "7. Gestión ambiental y manejo de residuos.\n"
+        "8. Pólizas de cumplimiento y contratos de obra.\n"
+    )
