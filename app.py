@@ -864,6 +864,14 @@ Prototipo de una aplicación multiagente para evaluar **pre-factibilidad** y mon
 - **Datos** en `data/` CSV dummy, cargados/cachéados con `src/data/loaders.py` y generados con `src/data/generate.py` y scripts en `scripts/`.
 - **LLM multi-proveedor** en `src/llm/`: un wrapper sobre el SDK de OpenAI que puede apuntar a Mistral, OpenAI u otros endpoints compatibles.
 
+## 2.1. ¿Usamos LangChain?
+No. Este prototipo **no usa LangChain**. Usamos un wrapper propio (`MultiProviderLLM` en `src/llm/client.py`) sobre el SDK oficial de `openai` para llamar a Mistral y otros endpoints compatibles. Se hizo así para:
+- Mantener el stack ligero y evitar dependencias adicionales en un MVP.
+- Tener control directo de prompts, contexto RAG y parámetros de generación.
+- Facilitar la migración futura a LangChain, LlamaIndex u otro framework si el proyecto crece.
+
+LangChain sería útil si en el futuro queremos orquestar agentes con herramientas, memoria a largo plazo o RAG vectorial con embeddings.
+
 ## 3. ¿Por qué solo funciona Mistral?
 En `src/llm/providers.py` se definen los proveedores y sus variables de entorno (`MISTRAL_API_KEY`, `OPENAI_API_KEY`, etc.). La app usa `resolve_api_key` para buscar la API key en `secrets.toml` o en variables de entorno. Hoy **solo `MISTRAL_API_KEY` está configurada**, por eso forzamos Mistral para reporte ejecutivo, checklist, asesor de diseño y alertas. Si se agregan las demás keys, `MultiProviderLLM` las usará automáticamente.
 
