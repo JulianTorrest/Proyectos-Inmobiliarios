@@ -1,6 +1,5 @@
-
 streamlit==1.37.1
-pandas==2.0.3
-numpy==1.24.4
 plotly==5.23.0
 openai==1.40.6
+numpy>=1.26.0,
+pandas>=2.1.0,
