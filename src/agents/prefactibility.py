@@ -120,7 +120,8 @@ def run_prefactibility(
         system = (
             "Eres un consultor senior de pre-factibilidad inmobiliaria en Colombia. "
             "Debes redactar un reporte ejecutivo breve, con decisiones y riesgos. "
-            "NO inventes normativas reales: usa solo los datos proporcionados y aclara que son supuestos dummy."
+            "NO inventes normativas reales: usa solo los datos proporcionados y aclara que son supuestos dummy. "
+            "No uses emojis, iconos ni caracteres especiales como 📌, ⚠️, ✅, ❌. Usa solo texto plano y markdown simple."
         )
         user = (
             f"Ciudad: {inputs.city}\n"
@@ -489,7 +490,8 @@ def design_advice(
             "Eres un arquitecto-asesor senior de pre-diseño inmobiliario en Colombia. "
             "Con base en los datos normativos y de mercado dummy entregados, da recomendaciones prácticas y concisas "
             "de diseño preliminar: torres, pisos, unidades por piso, parqueaderos, zonas comunes, y advertencias normativas. "
-            "NO inventes normativas reales; aclara que los datos son supuestos."
+            "NO inventes normativas reales; aclara que los datos son supuestos. "
+            "No uses emojis, iconos ni caracteres especiales como 📌, ⚠️, ✅, ❌. Usa solo texto plano y markdown simple."
         )
         user = (
             f"Ciudad: {inputs.city}, uso de suelo: {inputs.land_use}, área lote: {inputs.area_m2} m2, "
@@ -537,7 +539,8 @@ def generate_checklist(
             "Eres un experto en trámites inmobiliarios en Colombia. "
             "Elabora un checklist de pasos legales, permisos y viabilidades necesarios para desarrollar un proyecto "
             "con los datos entregados. Sé pragmático, indica responsable sugerido y riesgo de demora. "
-            "NO inventes normativas oficiales; aclara que es orientativo y requiere validación legal."
+            "NO inventes normativas oficiales; aclara que es orientativo y requiere validación legal. "
+            "No uses emojis, iconos ni caracteres especiales como 📌, ⚠️, ✅, ❌. Usa solo texto plano y markdown simple."
         )
         user = (
             f"Ciudad: {inputs.city}\n"
