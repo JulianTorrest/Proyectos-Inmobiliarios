@@ -3,3 +3,5 @@ plotly
 openai
 numpy
 pandas
+fpdf2
+openpyxl
