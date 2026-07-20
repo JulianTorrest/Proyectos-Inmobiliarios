@@ -9,11 +9,17 @@ import io
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from fpdf import FPDF
 
-from src.agents.construction import run_construction_monitor
+from src.agents.construction import (
+    lifecycle_status,
+    recommended_baseline,
+    run_construction_monitor,
+)
 from src.agents.prefactibility import (
     PrefactibilityInputs,
     design_advice,
+    generate_checklist,
     make_feasible,
     monte_carlo_prefactibility,
     recommend_unit_mix,
@@ -35,6 +41,89 @@ from src.llm.providers import PROVIDERS
 
 def _money(v: float) -> str:
     return f"${v:,.0f}"
+
+
+def _pdf_safe(text: str) -> str:
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def _generate_project_pdf() -> bytes:
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, _pdf_safe("Reporte Ejecutivo - Proyecto Inmobiliario"), ln=True, align="C")
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, _pdf_safe("1. Resumen del proyecto"), ln=True)
+    pdf.set_font("Arial", "", 10)
+    description = (
+        "Prototipo multiagente para evaluacion de pre-factibilidad y monitoreo de obras inmobiliarias en Colombia. "
+        "Los datos son dummy de referencia, no oficiales."
+    )
+    pdf.multi_cell(0, 5, _pdf_safe(description))
+    pdf.ln(3)
+
+    pref_inputs = st.session_state.get("pref_inputs")
+    pref_result = st.session_state.get("pref_result")
+    if pref_inputs and pref_result:
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 8, _pdf_safe("2. Pre-factibilidad"), ln=True)
+        pdf.set_font("Arial", "", 10)
+        irr = pref_result.finance.irr_annual
+        irr_str = f"{irr:.1%}" if irr is not None else "N/D"
+        lines = [
+            f"Ciudad: {pref_inputs.city}",
+            f"Uso de suelo: {pref_inputs.land_use}",
+            f"Area del lote: {pref_inputs.area_m2:,.0f} m2",
+            f"Pisos solicitados: {pref_inputs.floors_requested}",
+            f"Unidades: {pref_inputs.units}",
+            f"Tamano promedio: {pref_inputs.avg_unit_size_m2} m2",
+            f"Costo del lote: {_money(pref_inputs.land_cost)}",
+            f"VAN: {_money(pref_result.finance.npv)}",
+            f"TIR: {irr_str}",
+            f"Margen: {pref_result.finance.profit_margin:.1%}",
+            f"Permitido: {'Si' if pref_result.normative.allowed else 'No'}",
+        ]
+        for line in lines:
+            pdf.cell(0, 5, _pdf_safe(line), ln=True)
+        pdf.ln(3)
+        pdf.set_font("Arial", "B", 11)
+        pdf.cell(0, 6, _pdf_safe("Reporte ejecutivo"), ln=True)
+        pdf.set_font("Arial", "", 10)
+        for paragraph in pref_result.executive_report.split("\n"):
+            pdf.multi_cell(0, 5, _pdf_safe(paragraph))
+            pdf.ln(1)
+    else:
+        pdf.cell(0, 5, _pdf_safe("No se ha ejecutado la pre-factibilidad."), ln=True)
+
+    monitor_out = st.session_state.get("monitor_out")
+    if monitor_out:
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 8, _pdf_safe("3. Monitor de obra"), ln=True)
+        pdf.set_font("Arial", "", 10)
+        summary = monitor_out.summary.set_index("metric")
+        planned = float(summary.loc["planned_progress", "value"])
+        actual = float(summary.loc["actual_progress", "value"])
+        delta = float(summary.loc["delta", "value"])
+        pdf.cell(0, 5, _pdf_safe(f"Avance planeado: {planned:.1%}"), ln=True)
+        pdf.cell(0, 5, _pdf_safe(f"Avance real: {actual:.1%}"), ln=True)
+        pdf.cell(0, 5, _pdf_safe(f"Delta: {delta:.1%}"), ln=True)
+        atrasados = monitor_out.milestones[monitor_out.milestones["risk"] == "Atrasado"]["milestone"].tolist()
+        pdf.cell(0, 5, _pdf_safe(f"Hitos atrasados: {', '.join(atrasados) if atrasados else 'Ninguno'}"), ln=True)
+        pdf.ln(3)
+        pdf.set_font("Arial", "B", 11)
+        pdf.cell(0, 6, _pdf_safe("Alertas"), ln=True)
+        pdf.set_font("Arial", "", 10)
+        for paragraph in monitor_out.alert_report.split("\n"):
+            pdf.multi_cell(0, 5, _pdf_safe(paragraph))
+            pdf.ln(1)
+    else:
+        pdf.cell(0, 5, _pdf_safe("No se ha ejecutado el monitor de obra."), ln=True)
+
+    return bytes(pdf.output(dest="S"))
 
 
 def _build_chat_context() -> str:
@@ -150,6 +239,14 @@ def _cached_site_events_large(n: int, seed: int) -> pd.DataFrame:
 st.set_page_config(page_title="Multiagentes Inmobiliario (Colombia)", layout="wide")
 
 st.title("Evaluador Automatizado y Monitor de Obra (Multiagente)")
+
+pdf_bytes = _generate_project_pdf()
+st.download_button(
+    "Descargar PDF ejecutivo",
+    data=pdf_bytes,
+    file_name="reporte_proyecto.pdf",
+    mime="application/pdf",
+)
 
 
 llm = MultiProviderLLM(secrets=st.secrets)
@@ -424,6 +521,21 @@ with tab_pref:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
 
+            st.markdown("### Checklist de viabilidad")
+            if st.button("Generar checklist con LLM", key="btn_checklist"):
+                with st.spinner("Generando checklist..."):
+                    checklist = generate_checklist(
+                        inputs,
+                        rules_df,
+                        llm,
+                        provider,
+                        model=model,
+                        use_llm=bool(use_llm and configured),
+                    )
+                st.session_state["pref_checklist"] = checklist
+            if "pref_checklist" in st.session_state:
+                st.text_area("", value=st.session_state["pref_checklist"], height=240, key="checklist_text")
+
 
 with tab_monitor:
     st.subheader("Monitor de Ciclo de Vida de Obra (Extractor + Alertas)")
@@ -489,6 +601,44 @@ with tab_monitor:
             st.markdown("### Reporte de alertas")
             st.text_area("", value=out.alert_report, height=260)
 
+            st.markdown("---")
+            st.subheader("Ciclo de vida y cronograma")
+
+            life = lifecycle_status(baseline_df, events_df, as_of)
+            st.metric("Fase actual", life["phase"])
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Avance planeado", f"{life['planned_progress']:.1%}")
+            c2.metric("Avance real", f"{life['actual_progress']:.1%}")
+            c3.metric(
+                "Días al próximo hito",
+                life["days_to_next"] if life["days_to_next"] is not None else "N/A",
+            )
+            if life["next_date"]:
+                st.caption(f"Próximo hito: {life['next_milestone']} ({life['next_date']})")
+            st.markdown("**Acciones recomendadas:**")
+            for a in life["actions"]:
+                st.write(f"- {a}")
+
+            st.markdown("### Cronograma recomendado")
+            project_type = st.selectbox("Tipo de proyecto", ["residencial", "mixto"], key="project_type")
+            start_b = st.date_input("Fecha de inicio", value=date(2026, 1, 1), key="rec_start")
+            if st.button("Generar baseline sugerido", key="btn_rec_baseline"):
+                rec_df = recommended_baseline(start_b, project_type=project_type)
+                st.session_state["rec_baseline"] = rec_df
+            if "rec_baseline" in st.session_state:
+                st.dataframe(st.session_state["rec_baseline"], use_container_width=True)
+                csv = st.session_state["rec_baseline"].to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Descargar baseline CSV",
+                    data=csv,
+                    file_name="baseline_recomendado.csv",
+                    mime="text/csv",
+                )
+
+            st.markdown("### Exportar monitor")
+            mon_csv = out.milestones.to_csv(index=False).encode("utf-8")
+            st.download_button("Descargar hitos CSV", data=mon_csv, file_name="monitor_hitos.csv", mime="text/csv")
+
 
 with tab_chat:
     st.subheader("Chat del Proyecto")
@@ -517,6 +667,25 @@ with tab_chat:
         with lang_col:
             st.selectbox("Idioma", ["Español", "English"], key="chat_language")
         st.checkbox("Razonar paso a paso (Chain-of-Thought)", key="chat_cot")
+
+    with st.expander("Historial del chat", expanded=False):
+        if st.session_state.messages:
+            chat_df = pd.DataFrame(st.session_state.messages)
+            csv = chat_df.to_csv(index=False).encode("utf-8")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button(
+                    "Descargar historial CSV",
+                    data=csv,
+                    file_name="chat_historial.csv",
+                    mime="text/csv",
+                )
+            with c2:
+                if st.button("Borrar historial"):
+                    st.session_state.messages = []
+                    st.rerun()
+        else:
+            st.caption("Aún no hay mensajes.")
 
     provider, model, use_llm, configured = _llm_settings()
     if use_llm and not configured:
