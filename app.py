@@ -9,7 +9,15 @@ import plotly.express as px
 import streamlit as st
 
 from src.agents.construction import run_construction_monitor
-from src.agents.prefactibility import PrefactibilityInputs, run_prefactibility
+from src.agents.prefactibility import (
+    PrefactibilityInputs,
+    design_advice,
+    make_feasible,
+    monte_carlo_prefactibility,
+    recommend_unit_mix,
+    run_prefactibility,
+    sensitivity_analysis,
+)
 from src.data.loaders import (
     load_baseline_schedule,
     load_market_assumptions,
