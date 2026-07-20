@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import io
@@ -11,11 +11,8 @@ import plotly.express as px
 import streamlit as st
 from fpdf import FPDF
 
-from src.agents.construction import (
-    lifecycle_status,
-    recommended_baseline,
-    run_construction_monitor,
-)
+from src.agents.construction import run_construction_monitor
+from src.domain.construction_monitor import compute_progress
 from src.agents.prefactibility import (
     PrefactibilityInputs,
     design_advice,
@@ -124,6 +121,92 @@ def _generate_project_pdf() -> bytes:
         pdf.cell(0, 5, _pdf_safe("No se ha ejecutado el monitor de obra."), ln=True)
 
     return bytes(pdf.output(dest="S"))
+
+
+def lifecycle_status(baseline: pd.DataFrame, events: pd.DataFrame, as_of: date) -> dict:
+    milestones, summary = compute_progress(baseline, events, as_of)
+    planned = float(summary.loc[summary["metric"] == "planned_progress", "value"].iloc[0])
+    actual = float(summary.loc[summary["metric"] == "actual_progress", "value"].iloc[0])
+    delta = actual - planned
+    atrasados = milestones[milestones["risk"] == "Atrasado"]["milestone"].tolist()
+
+    future = milestones[~milestones["planned_completed"]].sort_values("planned_date")
+    if not future.empty:
+        next_m = future.iloc[0]
+        next_milestone = str(next_m["milestone"])
+        next_date = next_m["planned_date"]
+        days_to_next = (next_date - as_of).days
+    else:
+        next_milestone = "Ninguno"
+        next_date = None
+        days_to_next = None
+
+    if actual >= 1.0:
+        phase = "Entrega y cierre"
+    elif actual >= 0.75:
+        phase = "Acabados e instalaciones finales"
+    elif actual >= 0.40:
+        phase = "Obra gris / estructura y mampostería"
+    elif actual >= 0.10:
+        phase = "Preliminares / cimentación"
+    else:
+        phase = "Inicio / movimientos de tierra"
+
+    actions: list[str] = []
+    if atrasados:
+        actions.append(f"Recuperar hitos atrasados: {', '.join(atrasados)}.")
+    if delta < -0.05:
+        actions.append("Acelerar ritmo de obra para recuperar avance real vs planeado.")
+    elif delta >= 0:
+        actions.append("Mantener ritmo de obra; el avance está igual o adelantado.")
+    if next_date:
+        actions.append(f"Preparar el siguiente hito: {next_milestone} ({next_date.isoformat()}).")
+    else:
+        actions.append("Proyecto en cierre; coordinar entregas y puesta en marcha.")
+
+    return {
+        "phase": phase,
+        "planned_progress": planned,
+        "actual_progress": actual,
+        "delta": delta,
+        "atrasados": atrasados,
+        "next_milestone": next_milestone,
+        "next_date": next_date,
+        "days_to_next": days_to_next,
+        "actions": actions,
+    }
+
+
+def recommended_baseline(start_date: date, project_type: str = "residencial") -> pd.DataFrame:
+    templates = {
+        "residencial": [
+            ("Cierro y replanteo", 15),
+            ("Excavación", 30),
+            ("Cimentación", 45),
+            ("Estructura", 120),
+            ("Mampostería", 75),
+            ("Instalaciones", 90),
+            ("Acabados", 105),
+            ("Entrega", 15),
+        ],
+        "mixto": [
+            ("Cierro y replanteo", 20),
+            ("Excavación", 40),
+            ("Cimentación", 55),
+            ("Estructura", 150),
+            ("Mampostería", 90),
+            ("Instalaciones", 120),
+            ("Acabados", 130),
+            ("Entrega", 20),
+        ],
+    }
+    tasks = templates.get(project_type, templates["residencial"])
+    current = start_date
+    rows: list[dict] = []
+    for milestone, days in tasks:
+        current += timedelta(days=days)
+        rows.append({"milestone": milestone, "planned_date": current, "weight": days})
+    return pd.DataFrame(rows)
 
 
 def _build_chat_context() -> str:
@@ -314,28 +397,32 @@ with tab_pref:
 
     run = st.button("Evaluar pre-factibilidad", type="primary")
 
-    if run:
-        inputs = PrefactibilityInputs(
-            city=city,
-            land_use=land_use,
-            area_m2=float(area_m2),
-            floors_requested=int(floors_requested),
-            units=int(units),
-            avg_unit_size_m2=float(avg_unit_size_m2),
-            land_cost=float(land_cost),
-        )
-        result = run_prefactibility(
-            inputs=inputs,
-            normative_rules_df=rules_df,
-            market_df=market_df,
-            llm=llm,
-            provider=provider,
-            model=model,
-            use_llm=bool(use_llm and configured),
-        )
+    if run or "pref_result" in st.session_state:
+        if run:
+            inputs = PrefactibilityInputs(
+                city=city,
+                land_use=land_use,
+                area_m2=float(area_m2),
+                floors_requested=int(floors_requested),
+                units=int(units),
+                avg_unit_size_m2=float(avg_unit_size_m2),
+                land_cost=float(land_cost),
+            )
+            result = run_prefactibility(
+                inputs=inputs,
+                normative_rules_df=rules_df,
+                market_df=market_df,
+                llm=llm,
+                provider=provider,
+                model=model,
+                use_llm=bool(use_llm and configured),
+            )
 
-        st.session_state["pref_inputs"] = inputs
-        st.session_state["pref_result"] = result
+            st.session_state["pref_inputs"] = inputs
+            st.session_state["pref_result"] = result
+        else:
+            inputs = st.session_state["pref_inputs"]
+            result = st.session_state["pref_result"]
 
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Normativo", "OK" if result.normative.allowed else "NO OK")
