@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from openai import OpenAI
 
@@ -18,8 +18,13 @@ class LLMResult:
 
 
 class MultiProviderLLM:
-    def __init__(self, secrets: Optional[dict[str, Any]] = None):
-        self._secrets = secrets or {}
+    def __init__(self, secrets: Optional[Mapping[str, Any]] = None):
+        if secrets is None:
+            self._secrets = {}
+        elif isinstance(secrets, dict):
+            self._secrets = secrets
+        else:
+            self._secrets = {k: secrets[k] for k in secrets.keys()}
 
     def is_configured(self, provider: LLMProviderConfig) -> bool:
         return bool(resolve_api_key(provider, self._secrets))
