@@ -35,24 +35,65 @@ def _build_chat_context() -> str:
         "Los datos son dummy de referencia, no oficiales."
     ]
 
+    rules_df = load_normative_rules()
+    market_df = load_market_assumptions()
+    baseline_df = load_baseline_schedule()
+    events_df = load_site_events()
+
     pref_inputs = st.session_state.get("pref_inputs")
+    if pref_inputs:
+        rule_row = rules_df[
+            (rules_df["city"] == pref_inputs.city) & (rules_df["land_use"] == pref_inputs.land_use)
+        ].head(1)
+        if not rule_row.empty:
+            r = rule_row.iloc[0]
+            parts.append(
+                f"Normativa aplicable (RAG) para {pref_inputs.city}/{pref_inputs.land_use}: "
+                f"max_floors={r['max_floors']}, max_far={r['max_far']}, "
+                f"max_occupancy={r['max_occupancy_ratio']}, max_height_m={r['max_height_m']}, "
+                f"notas={r.get('notes', '')}"
+            )
+        market_row = market_df[
+            (market_df["city"] == pref_inputs.city) & (market_df["land_use"] == pref_inputs.land_use)
+        ].head(1)
+        if not market_row.empty:
+            m = market_row.iloc[0]
+            parts.append(
+                f"Supuestos de mercado (RAG) para {pref_inputs.city}/{pref_inputs.land_use}: "
+                f"precio_m2_venta={m['price_per_m2_sell']}, costo_m2_construccion={m['cost_per_m2_build']}, "
+                f"soft_cost_pct={m['soft_cost_pct']}, meses_construccion={m['build_months']}, "
+                f"meses_venta={m['sales_months']}, tasa_descuento_anual={m['discount_rate_annual']}"
+            )
+    else:
+        parts.append("Normativa disponible (RAG):\n" + rules_df.head(20).to_csv(index=False))
+        parts.append("Mercado disponible (RAG):\n" + market_df.head(20).to_csv(index=False))
+
+    parts.append("Cronograma baseline (RAG):\n" + baseline_df.head(20).to_csv(index=False))
+    recent_events = events_df.sort_values("event_date", ascending=False).head(20)
+    parts.append("Eventos recientes (RAG):\n" + recent_events.to_csv(index=False))
+
     pref_result = st.session_state.get("pref_result")
     if pref_inputs and pref_result:
         parts.append(
             f"Pre-factibilidad: ciudad={pref_inputs.city}, uso_suelo={pref_inputs.land_use}, "
             f"area_lote={pref_inputs.area_m2} m2, pisos_solicitados={pref_inputs.floors_requested}, "
-            f"unidades={pref_inputs.units}, costo_lote=${pref_inputs.land_cost:,.0f}"
+            f"unidades={pref_inputs.units}, tamano_promedio_unidad={pref_inputs.avg_unit_size_m2} m2, "
+            f"costo_lote=${pref_inputs.land_cost:,.0f}"
         )
         parts.append(
             f"Normativo: permitido={pref_result.normative.allowed}, "
             f"pisos_max={pref_result.normative.max_floors}, far_max={pref_result.normative.max_far}, "
-            f"ocupacion_max={pref_result.normative.max_occupancy_ratio}"
+            f"ocupacion_max={pref_result.normative.max_occupancy_ratio}, "
+            f"altura_max={pref_result.normative.max_height_m}"
         )
         irr = pref_result.finance.irr_annual
         irr_str = f"{irr:.1%}" if irr is not None else "N/D"
         parts.append(
-            f"Finanzas: VAN={pref_result.finance.npv:,.0f}, "
-            f"margen={pref_result.finance.profit_margin:.1%}, TIR_anual={irr_str}"
+            f"Métricas clave: VAN={pref_result.finance.npv:,.0f}, "
+            f"margen={pref_result.finance.profit_margin:.1%}, TIR_anual={irr_str}, "
+            f"ingresos={pref_result.finance.revenue_total:,.0f}, "
+            f"costos={pref_result.finance.costs_total:,.0f}, "
+            f"utilidad={pref_result.finance.profit_total:,.0f}"
         )
         parts.append(f"Riesgos: {', '.join(pref_result.risks) if pref_result.risks else 'Ninguno'}")
         parts.append("Reporte ejecutivo de pre-factibilidad:\n" + pref_result.executive_report)
@@ -109,6 +150,14 @@ if "model" not in st.session_state:
     st.session_state["model"] = ""
 if "use_llm" not in st.session_state:
     st.session_state["use_llm"] = True
+if "chat_role" not in st.session_state:
+    st.session_state["chat_role"] = "General"
+if "chat_tone" not in st.session_state:
+    st.session_state["chat_tone"] = "Ejecutivo"
+if "chat_cot" not in st.session_state:
+    st.session_state["chat_cot"] = False
+if "chat_language" not in st.session_state:
+    st.session_state["chat_language"] = "Español"
 
 
 def _llm_settings():
@@ -290,13 +339,23 @@ with tab_chat:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    with st.expander("Configuración LLM", expanded=True):
+    with st.expander("Configuración LLM y Estilo", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
             st.selectbox("Proveedor", list(PROVIDERS.keys()), key="provider_name")
         with col2:
             st.text_input("Modelo (opcional)", key="model")
         st.toggle("Usar LLM", key="use_llm")
+
+        st.markdown("---")
+        role_col, tone_col, lang_col = st.columns(3)
+        with role_col:
+            st.selectbox("Rol C-level", ["General", "CEO", "CFO", "COO", "CMO"], key="chat_role")
+        with tone_col:
+            st.selectbox("Tono", ["Ejecutivo", "Analista"], key="chat_tone")
+        with lang_col:
+            st.selectbox("Idioma", ["Español", "English"], key="chat_language")
+        st.checkbox("Razonar paso a paso (Chain-of-Thought)", key="chat_cot")
 
     provider, model, use_llm, configured = _llm_settings()
     if use_llm and not configured:
@@ -315,6 +374,10 @@ with tab_chat:
                 provider=provider,
                 model=model,
                 use_llm=bool(use_llm and configured),
+                role=st.session_state.get("chat_role", "General"),
+                tone=st.session_state.get("chat_tone", "Ejecutivo"),
+                cot=st.session_state.get("chat_cot", False),
+                language=st.session_state.get("chat_language", "Español"),
             )
         st.session_state.messages = updated
         st.rerun()
