@@ -56,6 +56,10 @@ def chat_response(
     if res.ok:
         answer = res.content
     else:
-        answer = _fallback_answer(messages[-1]["content"], context)
+        answer = (
+            "No pude contactar al LLM. Error del proveedor:\n\n"
+            f"```\n{res.error}\n```\n\n"
+            "Revisa la API key, el nombre del modelo y la conexión a internet."
+        )
 
     return answer, messages + [{"role": "assistant", "content": answer}]
