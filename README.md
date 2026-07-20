@@ -2,6 +2,7 @@
 
 Aplicación en **Streamlit** para evaluar la **pre-factibilidad** y monitorear el **ciclo de vida de obras inmobiliarias** en Colombia. Combina reglas de dominio, modelado financiero y LLMs (Mistral por defecto) para acelerar decisiones C-level usando datos dummy de referencia.
 
+Esta es la url del proyecto en streamlit cloud https://proyectos-inmobiliarios.streamlit.app/
 ---
 
 ## 1. Descripcion del proyecto
