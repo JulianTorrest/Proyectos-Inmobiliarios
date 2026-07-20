@@ -257,28 +257,35 @@ def _build_chat_context() -> str:
     pref_result = st.session_state.get("pref_result")
     if pref_inputs and pref_result:
         parts.append(
-            f"Pre-factibilidad: ciudad={pref_inputs.city}, uso_suelo={pref_inputs.land_use}, "
+            f"Entradas pre-factibilidad (completas): ciudad={pref_inputs.city}, uso_suelo={pref_inputs.land_use}, "
             f"area_lote={pref_inputs.area_m2} m2, pisos_solicitados={pref_inputs.floors_requested}, "
             f"unidades={pref_inputs.units}, tamano_promedio_unidad={pref_inputs.avg_unit_size_m2} m2, "
             f"costo_lote=${pref_inputs.land_cost:,.0f}"
         )
         parts.append(
-            f"Normativo: permitido={pref_result.normative.allowed}, "
+            f"Resultado normativo completo: permitido={pref_result.normative.allowed}, "
             f"pisos_max={pref_result.normative.max_floors}, far_max={pref_result.normative.max_far}, "
             f"ocupacion_max={pref_result.normative.max_occupancy_ratio}, "
-            f"altura_max={pref_result.normative.max_height_m}"
+            f"altura_max={pref_result.normative.max_height_m}, "
+            f"razones={' / '.join(pref_result.normative.reasons) if pref_result.normative.reasons else 'Ninguna'}"
         )
         irr = pref_result.finance.irr_annual
         irr_str = f"{irr:.1%}" if irr is not None else "N/D"
         parts.append(
-            f"Métricas clave: VAN={pref_result.finance.npv:,.0f}, "
+            f"Métricas financieras completas: VAN={pref_result.finance.npv:,.0f}, "
             f"margen={pref_result.finance.profit_margin:.1%}, TIR_anual={irr_str}, "
             f"ingresos={pref_result.finance.revenue_total:,.0f}, "
             f"costos={pref_result.finance.costs_total:,.0f}, "
             f"utilidad={pref_result.finance.profit_total:,.0f}"
         )
-        parts.append(f"Riesgos: {', '.join(pref_result.risks) if pref_result.risks else 'Ninguno'}")
+        parts.append(f"Riesgos identificados: {', '.join(pref_result.risks) if pref_result.risks else 'Ninguno'}")
         parts.append("Reporte ejecutivo de pre-factibilidad:\n" + pref_result.executive_report)
+        checklist = st.session_state.get("pref_checklist")
+        if checklist:
+            parts.append("Checklist de viabilidad generado:\n" + checklist)
+        design = st.session_state.get("design_advice_text")
+        if design:
+            parts.append("Asesor de diseño preliminar:\n" + design)
     else:
         parts.append("No se ha ejecutado aún la pre-factibilidad.")
 
@@ -291,9 +298,11 @@ def _build_chat_context() -> str:
         parts.append(
             f"Monitor de obra: avance_planeado={planned:.1%}, avance_real={actual:.1%}, delta={delta:.1%}"
         )
+        parts.append("Resumen del monitor de obra (CSV):\n" + monitor_out.summary.to_csv(index=False))
+        parts.append("Hitos del monitor de obra (CSV):\n" + monitor_out.milestones.to_csv(index=False))
         atrasados = monitor_out.milestones[monitor_out.milestones["risk"] == "Atrasado"]["milestone"].tolist()
         parts.append(f"Hitos atrasados: {', '.join(atrasados) if atrasados else 'Ninguno'}")
-        parts.append("Reporte de alertas:\n" + monitor_out.alert_report)
+        parts.append("Reporte de alertas del monitor de obra:\n" + monitor_out.alert_report)
     else:
         parts.append("No se ha ejecutado aún el monitor de obra.")
 
@@ -661,6 +670,8 @@ with tab_pref:
 with tab_monitor:
     st.subheader("Monitor de Ciclo de Vida de Obra (Extractor + Alertas)")
     provider, model, use_llm, configured = _llm_settings()
+    mistral_provider = PROVIDERS["Mistral"]
+    mistral_configured = llm.is_configured(mistral_provider)
 
     left, right = st.columns([1, 2])
     with left:
@@ -678,18 +689,21 @@ with tab_monitor:
     else:
         events_df = load_site_events()
 
-    if run_m:
-        out = run_construction_monitor(
-            baseline_df=baseline_df,
-            events_df=events_df,
-            as_of=as_of,
-            llm=llm,
-            provider=provider,
-            model=model,
-            use_llm=bool(use_llm and configured),
-        )
+    if run_m or "monitor_out" in st.session_state:
+        if run_m:
+            out = run_construction_monitor(
+                baseline_df=baseline_df,
+                events_df=events_df,
+                as_of=as_of,
+                llm=llm,
+                provider=mistral_provider,
+                model=None,
+                use_llm=mistral_configured,
+            )
 
-        st.session_state["monitor_out"] = out
+            st.session_state["monitor_out"] = out
+        else:
+            out = st.session_state["monitor_out"]
 
         with right:
             st.markdown("### Resumen")
