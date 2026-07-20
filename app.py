@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
+import io
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -270,6 +272,157 @@ with tab_pref:
 
         st.markdown("### Reporte ejecutivo")
         st.text_area("", value=result.executive_report, height=260)
+
+        st.markdown("---")
+        st.subheader("Optimización y análisis avanzado")
+
+        if "pref_result" in st.session_state:
+            inputs = st.session_state["pref_inputs"]
+            result = st.session_state["pref_result"]
+
+            st.markdown("### Asesor de diseño preliminar")
+            st.text_area("", value=design_advice(inputs, rules_df), height=140, key="design_advice_text")
+
+            with st.expander("Guardar y comparar escenarios", expanded=False):
+                c1, c2 = st.columns([1, 3])
+                with c1:
+                    if st.button("Guardar escenario actual"):
+                        scenarios = st.session_state.get("pref_scenarios", [])
+                        scenarios.append(
+                            {
+                                "nombre": f"Esc {len(scenarios) + 1}",
+                                "unidades": int(inputs.units),
+                                "pisos": int(inputs.floors_requested),
+                                "costo_lote": float(inputs.land_cost),
+                                "VAN": float(result.finance.npv),
+                                "margen": float(result.finance.profit_margin),
+                                "TIR": result.finance.irr_annual,
+                            }
+                        )
+                        st.session_state["pref_scenarios"] = scenarios
+                        st.rerun()
+                with c2:
+                    if st.session_state.get("pref_scenarios"):
+                        st.dataframe(pd.DataFrame(st.session_state["pref_scenarios"]), use_container_width=True)
+
+            st.markdown("### Análisis de sensibilidad (±10%)")
+            sens_df = sensitivity_analysis(inputs, rules_df, market_df)
+            st.dataframe(sens_df, use_container_width=True)
+            st.plotly_chart(
+                px.bar(sens_df, x="variable", y="npv", color="direccion", barmode="group", title="Impacto en VAN"),
+                use_container_width=True,
+            )
+
+            st.markdown("### Simulación Monte Carlo")
+            n_sim = st.number_input(
+                "Número de simulaciones",
+                min_value=50,
+                max_value=2000,
+                value=300,
+                step=50,
+                key="mc_n",
+            )
+            if st.button("Correr Monte Carlo"):
+                with st.spinner("Simulando..."):
+                    mc_df = monte_carlo_prefactibility(inputs, rules_df, market_df, n=int(n_sim))
+                st.session_state["mc_df"] = mc_df
+            if "mc_df" in st.session_state:
+                mc_df = st.session_state["mc_df"]
+                st.dataframe(mc_df.describe(), use_container_width=True)
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.plotly_chart(px.histogram(mc_df, x="npv", nbins=30, title="Distribución VAN"), use_container_width=True)
+                with c2:
+                    st.plotly_chart(px.histogram(mc_df, x="profit_margin", nbins=30, title="Distribución Margen"), use_container_width=True)
+
+            st.markdown("### Hazlo factible")
+            target_metric = st.selectbox(
+                "Métrica objetivo",
+                ["profit_margin", "npv", "irr_annual"],
+                key="target_metric",
+            )
+            if target_metric == "profit_margin":
+                target_value = st.number_input("Margen objetivo (%)", value=15.0, step=1.0, key="target_value") / 100.0
+            elif target_metric == "npv":
+                target_value = st.number_input(
+                    "VAN objetivo (COP)",
+                    value=0.0,
+                    step=1_000_000_000.0,
+                    key="target_value",
+                )
+            else:
+                target_value = st.number_input("TIR objetivo (%)", value=15.0, step=1.0, key="target_value") / 100.0
+            if st.button("Optimizar"):
+                with st.spinner("Buscando ajustes..."):
+                    feasible = make_feasible(inputs, rules_df, market_df, target_metric=target_metric, target_value=target_value)
+                st.session_state["feasible_result"] = feasible
+            if "feasible_result" in st.session_state:
+                feasible = st.session_state["feasible_result"]
+                st.write("**Mejor escenario encontrado:**")
+                st.json(feasible["params"])
+                if target_metric == "npv":
+                    st.metric("VAN alcanzado", _money(feasible["metric_value"]))
+                else:
+                    st.metric("Métrica alcanzada", f"{feasible['metric_value']:.2%}")
+                st.write(f"Meta alcanzada: {'Sí' if feasible['target_met'] else 'No'}")
+
+            st.markdown("### Recomendación de mix de unidades")
+            step_mix = st.number_input(
+                "Paso de unidades",
+                min_value=1,
+                max_value=50,
+                value=5,
+                step=1,
+                key="mix_step",
+            )
+            mix_df = recommend_unit_mix(inputs, rules_df, market_df, step=int(step_mix))
+            st.dataframe(mix_df.head(10), use_container_width=True)
+            st.plotly_chart(
+                px.line(mix_df, x="units", y="profit_margin", title="Margen por número de unidades"),
+                use_container_width=True,
+            )
+
+            st.markdown("### Comparables de mercado")
+            st.dataframe(market_df, use_container_width=True)
+
+            st.markdown("### Exportar resultados")
+            export_rows = [
+                ["Ciudad", inputs.city],
+                ["Uso de suelo", inputs.land_use],
+                ["Área lote (m2)", inputs.area_m2],
+                ["Pisos solicitados", inputs.floors_requested],
+                ["Unidades", inputs.units],
+                ["Tamaño promedio (m2)", inputs.avg_unit_size_m2],
+                ["Costo lote", inputs.land_cost],
+                ["VAN", result.finance.npv],
+                [
+                    "TIR",
+                    result.finance.irr_annual if result.finance.irr_annual is not None else "N/D",
+                ],
+                ["Margen", result.finance.profit_margin],
+                ["Ingresos", result.finance.revenue_total],
+                ["Costos", result.finance.costs_total],
+                ["Utilidad", result.finance.profit_total],
+                ["Permitido", result.normative.allowed],
+            ]
+            export_df = pd.DataFrame(export_rows, columns=["concepto", "valor"])
+            col_csv, col_xlsx = st.columns(2)
+            with col_csv:
+                st.download_button(
+                    "Descargar CSV",
+                    data=export_df.to_csv(index=False).encode("utf-8"),
+                    file_name="prefactibilidad.csv",
+                    mime="text/csv",
+                )
+            with col_xlsx:
+                buffer = io.BytesIO()
+                export_df.to_excel(buffer, index=False, sheet_name="Prefactibilidad")
+                st.download_button(
+                    "Descargar Excel",
+                    data=buffer.getvalue(),
+                    file_name="prefactibilidad.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
 
 
 with tab_monitor:
