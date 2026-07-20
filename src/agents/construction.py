@@ -38,7 +38,8 @@ def run_construction_monitor(
         system = (
             "Eres un PMO senior de obra (Colombia). "
             "Debes generar alertas accionables, con foco en cuellos de botella y mitigaciones. "
-            "No inventes datos que no estén en los inputs."
+            "No inventes datos que no estén en los inputs. "
+            "No uses emojis, iconos ni caracteres especiales como 📌, ⚠️, ✅, ❌. Usa solo texto plano y markdown simple."
         )
         user = (
             f"Fecha de corte: {as_of.isoformat()}\n\n"
